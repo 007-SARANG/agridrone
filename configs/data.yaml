@@ -1,0 +1,41 @@
+# AgriDrone data pipeline configuration (Phase 1).
+# No hardcoded paths or magic numbers live in code — everything routes through here.
+
+dataset:
+  name: PlantDoc-Object-Detection
+  # PlantDoc object-detection dataset (bounding boxes). CC-BY-4.0.
+  # Source repo has TRAIN/ + TEST/ image dirs and train_labels.csv / test_labels.csv
+  # in Pascal-VOC columns: filename,width,height,class,xmin,ymin,xmax,ymax
+  source_repo: https://github.com/pratikkayal/PlantDoc-Object-Detection-Dataset
+  # Downloaded as a zip of the repo's default branch (no auth needed).
+  download_url: https://github.com/pratikkayal/PlantDoc-Object-Detection-Dataset/archive/refs/heads/master.zip
+  license: CC-BY-4.0
+
+paths:
+  raw_dir: data/raw/plantdoc          # where the raw download + extraction lands
+  processed_dir: data/processed/plantdoc  # YOLO-format output (images/ + labels/)
+  reports_dir: reports
+
+# CSV column names in train_labels.csv / test_labels.csv (Pascal VOC style).
+csv_columns:
+  filename: filename
+  width: width
+  height: height
+  class_name: class
+  xmin: xmin
+  ymin: ymin
+  xmax: xmax
+  ymax: ymax
+
+# Original dataset splits. PlantDoc ships only TRAIN/TEST; we carve a val split
+# out of TRAIN for honest model selection (test stays untouched until final eval).
+splits:
+  train_dir: TRAIN
+  test_dir: TEST
+  val_fraction: 0.15   # fraction of TRAIN images held out for validation
+  seed: 42             # deterministic split
+
+# EDA settings
+eda:
+  n_sample_images: 12   # sample images (with boxes drawn) to save in the report
+  seed: 42

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agridrone"
+version = "0.1.0"
+description = "Crop disease detection with YOLO26 + inference optimization"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# -p no:cacheprovider keeps the tree clean; plugin autoload is disabled via the
+# Makefile/CI env (PYTEST_DISABLE_PLUGIN_AUTOLOAD) to avoid unrelated system
+# pytest plugins (e.g. ROS's launch_testing) leaking in through PYTHONPATH.
+addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["agridrone"]
+mypy_path = "src"
+ignore_missing_imports = true

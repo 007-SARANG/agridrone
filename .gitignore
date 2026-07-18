@@ -1,0 +1,48 @@
+# --- Data (never commit raw or processed datasets) ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# --- Model artifacts ---
+*.pt
+*.onnx
+*.engine
+runs/
+weights/
+mlruns/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- OS / editor ---
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# --- Reports: keep committed markdown/plots, ignore scratch ---
+reports/scratch/
+
+# --- Env / secrets ---
+.env
+*.local
+
+# --- Agent / tooling local state ---
+.claude/

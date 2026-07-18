@@ -1,0 +1,8 @@
+-r requirements.txt
+
+# --- Dev tooling ---
+ruff==0.8.4
+mypy==1.13.0
+types-PyYAML==6.0.12.20240917
+types-requests==2.32.0.20241016
+ipykernel==6.29.5
