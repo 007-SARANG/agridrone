@@ -174,14 +174,45 @@ boxes vs `Corn Gray leaf spot` ~66). Approach:
   Ultralytics detection (8.4.x) exposes no built-in class-weighted-loss flag for
   the `Detect` task, and hard loss-weighting can cause gradient spikes when a
   rare class finally lands in a batch. Instead a `YOLODataset` subclass computes
-  per-image sampling probabilities from inverse class frequency and draws rare
-  images more often during training only (val/test loading is untouched, so
+  per-image sampling probabilities from (dampened, capped) inverse class
+  frequency and draws rare images more often during training only — see the next
+  bullet for the dampening/cap knobs (val/test loading is untouched, so
   evaluation stays honest). The balancing math is pure numpy in
   [`agridrone.weighting`](src/agridrone/weighting.py) and fully unit-tested; the
   dataset subclass is monkey-patched into `ultralytics.data.build` at train time.
+- **Dampen and cap the weights** to avoid overfitting the tail. Pure inverse
+  frequency (`weight = total / count`) fully equalizes classes, but on a
+  long-tailed set that means the rarest classes are drawn from the same handful
+  of images over and over — the model memorizes them instead of generalizing.
+  Two config knobs (`configs/train.yaml → weighting`) control this:
+  - `power` (default `0.5`) — the inverse-frequency exponent.
+    `(total / count) ** power`. `1.0` is pure inverse frequency (full
+    equalization, most aggressive); `0.5` is **sqrt dampening**, which still
+    favors rare classes but far more gently; `0.0` disables balancing. The
+    tradeoff: lower `power` reduces overfitting risk on tiny classes at the cost
+    of leaving some imbalance in place.
+  - `max_ratio` (default `5.0`) — a hard cap so the rarest class is never
+    weighted more than `max_ratio ×` the most common present class, bounding the
+    realized amplification regardless of how extreme the raw skew is. `null`
+    disables the cap.
+
+  On PlantDoc specifically, `mean` aggregation already tempers amplification
+  (rare-class images usually contain common classes too), so the realized max
+  drops from ~3.2× (pure, uncapped) to ~1.9× with the defaults — the `max_ratio`
+  cap is a guardrail that only binds under harder skew or `agg: max`. The active
+  `power`/`max_ratio` and the max realized amplification are printed in the
+  results report so the settings are on record with the numbers.
 - Report **per-class AP** in the final results table alongside aggregate
   mAP@0.5 / mAP@0.5:0.95, so tail-class performance is visible and honestly
   reported rather than hidden inside an average.
+- **Quantify the oversampling effect**, so it is a number rather than trusted
+  code. After fine-tuning, `reports/phase2_results.md` gains a *raw vs effective
+  per-class exposure* table: raw box counts next to the expected boxes/epoch
+  under the sampler's own probability vector (an amplification factor `x` per
+  class). Because a uniform sampler would reproduce the raw counts exactly, `x`
+  is derived from the very distribution `np.random.choice` samples from — rare
+  classes show `x > 1`, common classes `x < 1`. Computed by
+  [`expected_class_exposure`](src/agridrone/weighting.py) (pure numpy, unit-tested).
 
 ## Testing
 

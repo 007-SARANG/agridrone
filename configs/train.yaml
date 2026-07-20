@@ -46,6 +46,11 @@ pretrain:
 weighting:
   enabled: true
   agg_func: mean       # how per-box class weights combine per image: mean|max|median|sum
+  # Dampening + cap to avoid overfitting the rarest classes. Pure inverse
+  # frequency (power=1.0, no cap) amplifies a ~15-box class 10x+, so training
+  # just memorizes those few repeated images. Defaults tame that:
+  power: 0.5           # inverse-freq exponent: 0.5=sqrt dampening, 1.0=pure, 0.0=uniform
+  max_ratio: 5.0       # hard cap on rarest/commonest class-weight ratio (null = uncapped)
 
 # --- Data -------------------------------------------------------------------
 data:
@@ -59,3 +64,6 @@ data:
 output:
   runs_dir: runs                        # Ultralytics run artifacts (weights, curves)
   results_table: reports/phase2_results.md   # per-class AP + aggregate mAP table
+  # Where the oversampling-effect table (raw vs effective per-class exposure) goes.
+  # Leave blank to share results_table (both tables coexist as separate sections).
+  sampling_report: ""

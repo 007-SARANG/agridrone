@@ -75,27 +75,60 @@ def class_instance_counts(
     return counts
 
 
-def class_weights(counts: np.ndarray) -> np.ndarray:
-    """Inverse-frequency class weights: ``total_instances / class_count``.
+def class_weights(
+    counts: np.ndarray, *, power: float = 1.0, max_ratio: float | None = None
+) -> np.ndarray:
+    """Inverse-frequency class weights, with optional dampening and a cap.
 
-    Rare classes get large weights, common classes small ones. Zero counts are
-    replaced with 1 before dividing so absent classes do not blow up to infinity
-    (they simply receive weight ``total``, which is harmless — no image references
-    them, so the weight is never actually aggregated).
+    The base weight is ``(total_instances / class_count) ** power``:
+
+    - ``power=1.0`` — **pure** inverse frequency (full equalization). The rarest
+      classes get enormous weights; on a long-tailed set like PlantDoc this can
+      amplify a ~15-box class 10x+, so training oversamples the same few images
+      over and over and risks memorizing them instead of generalizing.
+    - ``power=0.5`` — **sqrt dampening**. Still favors rare classes but far more
+      gently (a 42x raw weight ratio becomes ~6.5x), the standard mitigation for
+      the overfitting risk above.
+    - ``power=0.0`` — uniform (no balancing).
+
+    ``max_ratio`` then hard-caps how strongly the rarest class may be weighted
+    relative to the most common *present* class: weights are clipped so
+    ``max(weight) <= min_present_weight * max_ratio``. This bounds the realized
+    oversampling amplification regardless of how extreme the raw imbalance is.
+    ``None`` disables the cap.
+
+    Zero counts are replaced with 1 before dividing so absent classes do not blow
+    up to infinity (they are excluded from the cap's reference min and are never
+    aggregated anyway, since no image references them).
 
     Args:
         counts: Per-class instance counts (see :func:`class_instance_counts`).
+        power: Inverse-frequency exponent (>= 0). See above.
+        max_ratio: Optional cap (>= 1) on the rarest/commonest weight ratio.
 
     Returns:
         Float array of shape ``(n_classes,)`` with per-class weights. If there
         are no instances at all, returns all-ones (nothing to balance).
+
+    Raises:
+        ValueError: If ``power`` is negative or ``max_ratio`` is < 1.
     """
+    if power < 0:
+        raise ValueError(f"power must be >= 0, got {power}.")
+    if max_ratio is not None and max_ratio < 1:
+        raise ValueError(f"max_ratio must be >= 1, got {max_ratio}.")
     counts = np.asarray(counts, dtype=np.float64)
     total = float(counts.sum())
     if total <= 0:
         return np.ones_like(counts)
     safe = np.where(counts <= 0, 1.0, counts)
-    return total / safe
+    weights = (total / safe) ** power
+    if max_ratio is not None:
+        present = counts > 0
+        if present.any():
+            floor = float(weights[present].min())
+            weights = np.minimum(weights, floor * float(max_ratio))
+    return weights
 
 
 def image_weights(
@@ -172,3 +205,63 @@ def sampling_probabilities(weights: np.ndarray) -> np.ndarray:
         # Degenerate: no signal to balance on, sample uniformly.
         return np.full_like(weights, 1.0 / weights.size)
     return weights / total
+
+
+def expected_class_exposure(
+    per_image_class_ids: Iterable[Sequence[int]],
+    probabilities: np.ndarray,
+    n_classes: int,
+    n_draws: int | None = None,
+) -> np.ndarray:
+    """Expected per-class box instances seen in one oversampled epoch.
+
+    Each of ``n_draws`` samples in an epoch is an image drawn (with replacement)
+    according to ``probabilities``. The expected number of class-``c`` boxes seen
+    across those draws is::
+
+        n_draws * sum_i  p_i * (boxes of class c in image i)
+
+    With ``n_draws`` defaulting to the image count (one Ultralytics epoch draws
+    exactly ``len(dataset)`` samples), this is directly comparable to the raw
+    per-class box counts from :func:`class_instance_counts`: under *uniform*
+    sampling (``p_i = 1/N``) the formula collapses back to the raw counts, so the
+    ratio ``effective / raw`` is a clean amplification factor showing how much more
+    (or less) often each class is seen once oversampling is active.
+
+    Args:
+        per_image_class_ids: One class-ID list per image (same order/length as
+            ``probabilities``).
+        probabilities: Per-image sampling distribution from
+            :func:`sampling_probabilities`.
+        n_classes: Total number of classes. IDs must be in ``[0, n_classes)``.
+        n_draws: Samples drawn per epoch; defaults to the number of images.
+
+    Returns:
+        Float array of shape ``(n_classes,)`` of expected box instances per epoch.
+
+    Raises:
+        ValueError: If ``n_classes`` is not positive, the lengths disagree, or a
+            class ID is out of range.
+    """
+    if n_classes <= 0:
+        raise ValueError(f"n_classes must be positive, got {n_classes}.")
+    probabilities = np.asarray(probabilities, dtype=np.float64)
+    per_image = list(per_image_class_ids)
+    if len(per_image) != probabilities.shape[0]:
+        raise ValueError(
+            f"per_image_class_ids ({len(per_image)}) and probabilities "
+            f"({probabilities.shape[0]}) must have the same length."
+        )
+    if n_draws is None:
+        n_draws = len(per_image)
+
+    exposure = np.zeros(n_classes, dtype=np.float64)
+    for p, img_classes in zip(probabilities, per_image, strict=True):
+        for cid in img_classes:
+            c = int(cid)
+            if c < 0 or c >= n_classes:
+                raise ValueError(
+                    f"class id {c} out of range for n_classes={n_classes}."
+                )
+            exposure[c] += float(p)
+    return exposure * float(n_draws)

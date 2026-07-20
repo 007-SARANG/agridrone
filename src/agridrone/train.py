@@ -29,7 +29,11 @@ from typing import Any
 import numpy as np
 
 from .config import load_config, resolve_path
-from .weighting import class_instance_counts, class_weights
+from .weighting import (
+    class_instance_counts,
+    class_weights,
+    expected_class_exposure,
+)
 
 _ULTRALYTICS_HINT = (
     "The training stack (torch + ultralytics) is not installed in this "
@@ -56,7 +60,9 @@ def _require_ultralytics():  # pragma: no cover - exercised only with the full s
 # ---------------------------------------------------------------------------
 
 
-def make_weighted_dataset_class(agg: str = "mean"):  # pragma: no cover - needs ultralytics
+def make_weighted_dataset_class(
+    agg: str = "mean", *, power: float = 0.5, max_ratio: float | None = 5.0
+):  # pragma: no cover - needs ultralytics
     """Build a ``YOLODataset`` subclass that oversamples rare-class images.
 
     The subclass computes per-image sampling probabilities once at init (using the
@@ -67,6 +73,11 @@ def make_weighted_dataset_class(agg: str = "mean"):  # pragma: no cover - needs 
     Args:
         agg: Aggregation used to combine an image's per-class weights into one
             per-image weight (``mean|max|median|sum``).
+        power: Inverse-frequency exponent for class weights (``0.5`` = sqrt
+            dampening, ``1.0`` = pure inverse frequency). See
+            :func:`agridrone.weighting.class_weights`.
+        max_ratio: Cap on the rarest/commonest class-weight ratio (``None`` =
+            uncapped). Bounds the realized oversampling amplification.
 
     Returns:
         A ``YOLODataset`` subclass ready to be patched into ``ultralytics.data.build``.
@@ -78,6 +89,10 @@ def make_weighted_dataset_class(agg: str = "mean"):  # pragma: no cover - needs 
 
     class YOLOWeightedDataset(YOLODataset):
         """YOLODataset that samples images by inverse class frequency in training."""
+
+        # Set by the train-mode instance so finetune_detector can report the
+        # oversampling effect (raw vs effective per-class exposure) after training.
+        last_train_stats: dict[str, Any] | None = None
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
@@ -93,10 +108,25 @@ def make_weighted_dataset_class(agg: str = "mean"):  # pragma: no cover - needs 
             n_classes = len(getattr(self, "data", {}).get("names", {})) or (
                 int(max((max(p) for p in per_image if p), default=-1)) + 1
             )
-            counts = class_instance_counts(per_image, n_classes=max(n_classes, 1))
-            cls_w = class_weights(counts)
+            n_classes = max(n_classes, 1)
+            counts = class_instance_counts(per_image, n_classes=n_classes)
+            cls_w = class_weights(counts, power=power, max_ratio=max_ratio)
             img_w = image_weights(per_image, cls_w, agg=agg)
             self.probabilities = sampling_probabilities(img_w)
+            # Record the exact distribution the sampler will use so the effect is
+            # reportable as a number, not just trusted. Only the train split
+            # oversamples, so only it is worth capturing.
+            if self.train_mode:
+                type(self).last_train_stats = {
+                    "names": dict(getattr(self, "data", {}).get("names", {})),
+                    "n_classes": n_classes,
+                    "counts": counts,
+                    "probabilities": self.probabilities,
+                    "per_image": per_image,
+                    "agg": agg,
+                    "power": power,
+                    "max_ratio": max_ratio,
+                }
 
         def __getitem__(self, index: int) -> Any:
             if not self.train_mode:
@@ -107,18 +137,33 @@ def make_weighted_dataset_class(agg: str = "mean"):  # pragma: no cover - needs 
     return YOLOWeightedDataset
 
 
-def enable_weighted_sampling(agg: str = "mean") -> None:  # pragma: no cover - needs ultralytics
+def enable_weighted_sampling(
+    agg: str = "mean", *, power: float = 0.5, max_ratio: float | None = 5.0
+):  # pragma: no cover - needs ultralytics
     """Monkey-patch ultralytics so training uses the weighted dataset.
 
     Ultralytics builds datasets via ``ultralytics.data.build.YOLODataset``; swapping
     that name in is the documented, source-free way to inject a custom dataset for
     ``Detect`` training. Call this before ``model.train(...)``.
+
+    Args:
+        agg: Per-image weight aggregation (``mean|max|median|sum``).
+        power: Inverse-frequency exponent (``0.5`` = sqrt dampening, ``1.0`` = pure).
+        max_ratio: Cap on the rarest/commonest weight ratio (``None`` = uncapped).
+
+    Returns the patched-in dataset class so the caller can read
+    ``last_train_stats`` after training to report the oversampling effect.
     """
     _require_ultralytics()
     import ultralytics.data.build as build  # noqa: PLC0415
 
-    build.YOLODataset = make_weighted_dataset_class(agg=agg)
-    print(f"[train] Weighted oversampling enabled (agg={agg}).")
+    weighted_cls = make_weighted_dataset_class(agg=agg, power=power, max_ratio=max_ratio)
+    build.YOLODataset = weighted_cls
+    print(
+        f"[train] Weighted oversampling enabled "
+        f"(agg={agg}, power={power}, max_ratio={max_ratio})."
+    )
+    return weighted_cls
 
 
 # ---------------------------------------------------------------------------
@@ -221,14 +266,19 @@ def finetune_detector(
 
     tcfg = cfg["train"]
     wcfg = cfg.get("weighting", {})
+    weighted_cls = None
     if wcfg.get("enabled", False) and not baseline:
-        enable_weighted_sampling(agg=wcfg.get("agg_func", "mean"))
+        weighted_cls = enable_weighted_sampling(
+            agg=wcfg.get("agg_func", "mean"),
+            power=float(wcfg.get("power", 0.5)),
+            max_ratio=wcfg.get("max_ratio", 5.0),
+        )
 
     weights = cfg["models"]["baseline"] if baseline else cfg["models"]["detector"]
     start_from = str(backbone) if (backbone and not baseline) else weights
     model = YOLO(start_from)
 
-    return model.train(
+    results = model.train(
         data=str(resolve_dataset_yaml(cfg)),
         epochs=int(tcfg["epochs"]),
         imgsz=int(tcfg["imgsz"]),
@@ -241,11 +291,137 @@ def finetune_detector(
         name="plantdoc_baseline" if baseline else "plantdoc_finetune",
     )
 
+    # Record the actual oversampling effect (raw vs effective per-class exposure)
+    # so it is a number to point at, not code taken on trust.
+    if weighted_cls is not None and weighted_cls.last_train_stats is not None:
+        write_sampling_report(cfg, weighted_cls.last_train_stats)
+
+    return results
+
+
+_RESULTS_H1 = "# Phase 2 — Detection results"
+_RESULTS_HEADING = "Detection accuracy — per-class AP + mAP"
+_SAMPLING_HEADING = "Oversampling effect — raw vs effective per-class exposure"
+
+
+def _upsert_section(existing: str, heading: str, body: str) -> str:
+    """Insert or replace a ``## heading`` section within a results markdown doc.
+
+    Keeps the shared ``# Phase 2`` H1 and any sibling sections intact, so the
+    accuracy table and the oversampling table coexist in one file no matter which
+    stage writes first or whether a stage is re-run. ``body`` is the section text
+    starting at its ``## heading`` line.
+    """
+    body = body.rstrip("\n")
+    marker = f"## {heading}"
+    if not existing.strip():
+        return f"{_RESULTS_H1}\n\n{body}\n"
+
+    lines = existing.splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.strip() == marker), None)
+    if start is None:
+        return existing.rstrip("\n") + "\n\n" + body + "\n"
+    # Replace from the heading up to (but not including) the next H2, or EOF.
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+        len(lines),
+    )
+    new_lines = lines[:start] + body.splitlines() + [""] + lines[end:]
+    return "\n".join(new_lines).rstrip("\n") + "\n"
+
+
+def format_sampling_report(stats: dict[str, Any]) -> str:
+    """Render the raw-vs-effective per-class exposure table from sampling stats.
+
+    ``stats`` is the ``last_train_stats`` dict captured by the weighted dataset:
+    ``names``, ``n_classes``, ``counts`` (raw boxes per class), ``probabilities``
+    (the exact per-image distribution the sampler used), and ``per_image`` (each
+    image's class-ID list). The effective column is the *expected* number of boxes
+    of each class seen in one epoch of oversampling — comparable to the raw counts
+    because a uniform sampler would reproduce them exactly. See
+    :func:`agridrone.weighting.expected_class_exposure`.
+    """
+    names: dict[int, str] = stats["names"]
+    n_classes: int = stats["n_classes"]
+    counts = np.asarray(stats["counts"], dtype=float)
+    effective = expected_class_exposure(
+        stats["per_image"], stats["probabilities"], n_classes=n_classes
+    )
+    total_boxes = float(counts.sum())
+    power = stats.get("power")
+    max_ratio = stats.get("max_ratio")
+
+    # Describe the active weighting knobs so the report is self-explaining: a
+    # reader can see whether dampening/capping was on without reading the config.
+    if power is None:
+        knob_line = ""
+    else:
+        cap_txt = f"capped at {max_ratio:g}x" if max_ratio is not None else "uncapped"
+        power_txt = {1.0: "pure inverse frequency", 0.5: "sqrt-dampened"}.get(
+            float(power), f"inverse frequency ** {power:g}"
+        )
+        knob_line = (
+            f"Weighting: **{power_txt}** (`power={power:g}`), class-weight ratio "
+            f"**{cap_txt}** (`max_ratio={max_ratio if max_ratio is not None else 'none'}`). "
+            "Dampening + the cap deliberately hold back the rarest classes so training "
+            "does not just memorize a handful of repeated tail images.\n"
+        )
+
+    lines = [
+        f"## {_SAMPLING_HEADING}\n",
+        "How many bounding-box instances of each class the model *actually* sees "
+        "per epoch once weighted oversampling is active, versus the raw dataset "
+        "counts. `Effective` is the expected boxes/epoch under the sampler's own "
+        "probability vector (one epoch = one draw per image, with replacement); a "
+        "uniform sampler would reproduce `Raw` exactly, so `x` is the amplification "
+        "factor. Rare classes should show `x > 1`, common classes `x < 1`.\n",
+    ]
+    if knob_line:
+        lines.append(knob_line)
+    lines += [
+        "| ID | Class | Raw boxes | Raw % | Effective/epoch | Effective % | x |",
+        "|---:|-------|----------:|------:|----------------:|------------:|----:|",
+    ]
+    eff_total = float(effective.sum())
+    # Order by rarity (rarest first) so the tail classes the oversampling targets
+    # are read first, not buried at the bottom.
+    order = sorted(range(n_classes), key=lambda c: counts[c])
+    for c in order:
+        name = names.get(c, str(c))
+        raw = counts[c]
+        eff = effective[c]
+        raw_pct = (raw / total_boxes * 100.0) if total_boxes else 0.0
+        eff_pct = (eff / eff_total * 100.0) if eff_total else 0.0
+        factor = (eff / raw) if raw > 0 else float("nan")
+        factor_cell = f"{factor:.2f}" if raw > 0 else "—"
+        lines.append(
+            f"| {c} | {name} | {int(raw)} | {raw_pct:.1f}% | "
+            f"{eff:.1f} | {eff_pct:.1f}% | {factor_cell} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def write_sampling_report(cfg: dict[str, Any], stats: dict[str, Any]) -> Path:
+    """Upsert the oversampling-effect table into the Phase 2 results markdown.
+
+    Writes to ``output.sampling_report`` if set, else shares the results-table
+    file (``output.results_table``). The section is inserted or replaced in place
+    so it coexists with the accuracy table regardless of stage order or re-runs.
+    """
+    target = cfg["output"].get("sampling_report") or cfg["output"]["results_table"]
+    out = resolve_path(target)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    existing = out.read_text(encoding="utf-8") if out.exists() else ""
+    merged = _upsert_section(existing, _SAMPLING_HEADING, format_sampling_report(stats))
+    out.write_text(merged, encoding="utf-8")
+    print(f"[train] Oversampling report written to {out}")
+    return out
+
 
 def _format_results_table(names: dict[int, str], metrics: Any) -> str:
-    """Render a per-class AP + aggregate mAP markdown table from val metrics."""
+    """Render a per-class AP + aggregate mAP markdown section from val metrics."""
     lines = [
-        "# Phase 2 — Detection results\n",
+        f"## {_RESULTS_HEADING}\n",
         f"**mAP@0.5:** {float(metrics.box.map50):.4f}  ",
         f"**mAP@0.5:0.95:** {float(metrics.box.map):.4f}\n",
         "Per-class AP@0.5 (tail classes reported explicitly, not hidden in the mean):\n",
@@ -273,7 +449,11 @@ def evaluate(cfg: dict[str, Any], weights: str | Path):  # pragma: no cover - ne
     names = dict(metrics.names) if hasattr(metrics, "names") else dict(model.names)
     out = resolve_path(cfg["output"]["results_table"])
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(_format_results_table(names, metrics), encoding="utf-8")
+    existing = out.read_text(encoding="utf-8") if out.exists() else ""
+    merged = _upsert_section(
+        existing, _RESULTS_HEADING, _format_results_table(names, metrics)
+    )
+    out.write_text(merged, encoding="utf-8")
     print(f"[train] Results table written to {out}")
     return metrics
 

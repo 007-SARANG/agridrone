@@ -51,6 +51,47 @@ def test_class_weights_all_zero_returns_ones():
     assert cw.tolist() == [1.0, 1.0, 1.0, 1.0]
 
 
+def test_class_weights_sqrt_power_dampens():
+    # power=0.5 shrinks the rare/common weight ratio vs pure inverse frequency.
+    counts = np.array([100, 4])
+    pure = w.class_weights(counts, power=1.0)
+    sqrt = w.class_weights(counts, power=0.5)
+    pure_ratio = pure[1] / pure[0]
+    sqrt_ratio = sqrt[1] / sqrt[0]
+    assert pure_ratio == pytest.approx(25.0)          # (104/4)/(104/100)
+    assert sqrt_ratio == pytest.approx(5.0)           # sqrt(25)
+    assert sqrt_ratio < pure_ratio                     # dampened
+
+
+def test_class_weights_power_zero_is_uniform():
+    cw = w.class_weights(np.array([100, 4, 1]), power=0.0)
+    assert np.allclose(cw, 1.0)                         # anything**0 == 1
+
+
+def test_class_weights_max_ratio_caps_amplification():
+    # Extreme imbalance; cap the rarest weight to 5x the most-common present class.
+    counts = np.array([1000, 2])
+    cw = w.class_weights(counts, power=1.0, max_ratio=5.0)
+    assert cw[1] / cw[0] == pytest.approx(5.0)         # clipped from ~500x
+    assert np.all(np.isfinite(cw))
+
+
+def test_class_weights_max_ratio_ignores_absent_classes():
+    # An absent class (count 0) must not become the cap's reference floor.
+    counts = np.array([100, 0, 4])
+    cw = w.class_weights(counts, power=1.0, max_ratio=3.0)
+    present = cw[[0, 2]]
+    assert present.max() / present.min() == pytest.approx(3.0)
+    assert np.all(np.isfinite(cw))
+
+
+def test_class_weights_rejects_bad_params():
+    with pytest.raises(ValueError):
+        w.class_weights(np.array([1, 2]), power=-0.5)
+    with pytest.raises(ValueError):
+        w.class_weights(np.array([1, 2]), max_ratio=0.5)
+
+
 def test_image_weights_mean_default():
     cw = np.array([1.0, 5.0])
     # image with both classes -> mean(1,5)=3; image with only rare -> 5
@@ -105,3 +146,47 @@ def test_rare_class_image_oversampled_end_to_end():
     probs = w.sampling_probabilities(iw)
     # The image containing the rare class must be the most likely to be drawn.
     assert int(np.argmax(probs)) == 3
+
+
+def test_expected_exposure_uniform_reproduces_raw_counts():
+    # Under a uniform sampler, expected boxes/epoch == raw box counts exactly.
+    labels = [[0, 0], [0, 1], [1], []]
+    counts = w.class_instance_counts(labels, n_classes=2)
+    uniform = np.full(len(labels), 1.0 / len(labels))
+    exposure = w.expected_class_exposure(labels, uniform, n_classes=2)
+    assert exposure == pytest.approx(counts.astype(float))
+
+
+def test_expected_exposure_amplifies_rare_class():
+    # Rare class1 should be seen MORE than raw, common class0 less, once weighted.
+    labels = [[0, 0], [0, 0], [0, 0], [0, 1]]
+    counts = w.class_instance_counts(labels, n_classes=2)
+    cw = w.class_weights(counts)
+    probs = w.sampling_probabilities(w.image_weights(labels, cw, agg="mean"))
+    exposure = w.expected_class_exposure(labels, probs, n_classes=2)
+    # Amplification factor: rare class up (>1), common class down (<1).
+    assert exposure[1] / counts[1] > 1.0
+    assert exposure[0] / counts[0] < 1.0
+
+
+def test_expected_exposure_scales_with_draws():
+    labels = [[0], [1]]
+    probs = np.array([0.5, 0.5])
+    one = w.expected_class_exposure(labels, probs, n_classes=2, n_draws=2)
+    ten = w.expected_class_exposure(labels, probs, n_classes=2, n_draws=20)
+    assert ten == pytest.approx(one * 10.0)
+
+
+def test_expected_exposure_rejects_length_mismatch():
+    with pytest.raises(ValueError):
+        w.expected_class_exposure([[0], [1]], np.array([1.0]), n_classes=2)
+
+
+def test_expected_exposure_rejects_out_of_range_id():
+    with pytest.raises(ValueError):
+        w.expected_class_exposure([[5]], np.array([1.0]), n_classes=2)
+
+
+def test_expected_exposure_rejects_bad_n_classes():
+    with pytest.raises(ValueError):
+        w.expected_class_exposure([[0]], np.array([1.0]), n_classes=0)
