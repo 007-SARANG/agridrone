@@ -287,14 +287,19 @@ def finetune_detector(
         seed=int(tcfg["seed"]),
         patience=int(tcfg["patience"]),
         workers=int(tcfg["workers"]),
+        plots=bool(tcfg.get("plots", True)),
         project=cfg["output"]["runs_dir"],
         name="plantdoc_baseline" if baseline else "plantdoc_finetune",
     )
 
     # Record the actual oversampling effect (raw vs effective per-class exposure)
-    # so it is a number to point at, not code taken on trust.
+    # so it is a number to point at, not code taken on trust. Guarded: a failure
+    # writing the report must never discard a multi-hour training result.
     if weighted_cls is not None and weighted_cls.last_train_stats is not None:
-        write_sampling_report(cfg, weighted_cls.last_train_stats)
+        try:
+            write_sampling_report(cfg, weighted_cls.last_train_stats)
+        except Exception as exc:  # noqa: BLE001 - report is best-effort, model matters
+            print(f"[train] WARNING: could not write oversampling report: {exc}")
 
     return results
 
@@ -445,7 +450,11 @@ def evaluate(cfg: dict[str, Any], weights: str | Path):  # pragma: no cover - ne
     from ultralytics import YOLO  # noqa: PLC0415
 
     model = YOLO(str(weights))
-    metrics = model.val(data=str(resolve_dataset_yaml(cfg)), split="test")
+    metrics = model.val(
+        data=str(resolve_dataset_yaml(cfg)),
+        split="test",
+        plots=bool(cfg["train"].get("plots", True)),
+    )
     names = dict(metrics.names) if hasattr(metrics, "names") else dict(model.names)
     out = resolve_path(cfg["output"]["results_table"])
     out.parent.mkdir(parents=True, exist_ok=True)

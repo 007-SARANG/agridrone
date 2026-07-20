@@ -23,6 +23,10 @@ train:
   device: 0            # GPU index; set to "cpu" only for a tiny smoke test
   patience: 20         # early-stop if val mAP stalls for this many epochs
   workers: 4
+  # Ultralytics batch-preview mosaics. A Pillow C-extension bug on some Colab
+  # images makes these plotting threads spew (harmless) tracebacks during val;
+  # set false there to keep logs clean. Metrics/curves are unaffected either way.
+  plots: true
 
 # --- PlantVillage backbone pretrain (step 1 of pretrain->finetune) ----------
 # Pretrain the backbone as an image classifier on PlantVillage (large, related
