@@ -21,6 +21,7 @@ import io
 import shutil
 import urllib.request
 import zipfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,7 @@ class SplitStats:
     # Data-quality counters, surfaced in the EDA report.
     n_boxes_dropped_degenerate: int = 0  # zero/negative-area boxes skipped
     n_boxes_dropped_bad_dims: int = 0  # rows with width<=0 or height<=0 in the CSV
+    n_boxes_dropped_excluded_class: int = 0  # boxes of classes excluded via config
     n_boxes_clamped: int = 0  # boxes kept but with coords clamped to [0, 1]
     n_rows_missing_image: int = 0  # CSV rows whose image file was absent
 
@@ -187,13 +189,21 @@ def _find_dataset_root(search_dir: Path) -> Path | None:
 # ---------------------------------------------------------------------------
 
 
-def build_class_list(train_df: pd.DataFrame, test_df: pd.DataFrame) -> list[str]:
+def build_class_list(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    excluded: Iterable[str] | None = None,
+) -> list[str]:
     """Return the sorted, de-duplicated class name list across both splits.
 
     Sorting makes class IDs deterministic and reproducible across runs.
+    Any names in ``excluded`` are removed (matched after stripping whitespace)
+    so their boxes never receive a class ID.
     """
+    excluded_set = {str(e).strip() for e in (excluded or [])}
     names = pd.concat([train_df["class_name"], test_df["class_name"]], ignore_index=True)
-    return sorted(names.astype(str).str.strip().unique().tolist())
+    uniq = names.astype(str).str.strip().unique().tolist()
+    return sorted(n for n in uniq if n not in excluded_set)
 
 
 def convert_split(
@@ -238,6 +248,12 @@ def convert_split(
         label_lines: list[str] = []
         for _, r in rows.iterrows():
             cname = str(r["class_name"]).strip()
+            # Classes excluded via config carry no class ID; drop their boxes.
+            # (An image left with no remaining boxes becomes a background image,
+            # matching how degenerate/bad boxes are already handled.)
+            if cname not in class_to_id:
+                stats.n_boxes_dropped_excluded_class += 1
+                continue
             # A handful of PlantDoc rows record width/height as 0 (annotation
             # errors). Their normalized coords are undefined, so drop them.
             if int(r["width"]) <= 0 or int(r["height"]) <= 0:
@@ -313,8 +329,11 @@ def prepare_dataset(
     train_df = _load_labels_csv(root / "train_labels.csv", csv_cols)
     test_df = _load_labels_csv(root / "test_labels.csv", csv_cols)
 
-    class_names = build_class_list(train_df, test_df)
+    excluded = cfg.get("excluded_classes", [])
+    class_names = build_class_list(train_df, test_df, excluded=excluded)
     class_to_id = {name: i for i, name in enumerate(class_names)}
+    if excluded:
+        print(f"[data] Excluding {len(excluded)} class(es) from training: {excluded}")
 
     processed = resolve_path(cfg["paths"]["processed_dir"])
     if processed.exists():
@@ -350,6 +369,7 @@ def prepare_dataset(
         "dataset_yaml": str(dataset_yaml),
         "n_classes": len(class_names),
         "class_names": class_names,
+        "excluded_classes": list(excluded),
         "splits": {k: _stats_to_dict(v) for k, v in stats.items()},
     }
 
@@ -381,6 +401,54 @@ def write_dataset_yaml(processed_dir: Path, class_names: list[str]) -> Path:
     return out
 
 
+def sync_to_drive(
+    dest_dir: str | Path, config_path: str | Path = "configs/data.yaml"
+) -> Path:
+    """Copy the processed YOLO dataset to ``dest_dir`` (e.g. a mounted Drive path).
+
+    Training runs on Colab, where re-downloading + re-converting PlantDoc (~995 MB)
+    every session is wasteful. Converting once locally and caching the processed
+    dataset to Google Drive lets Colab mount it directly. This copies the
+    ``images/``, ``labels/``, and metadata into ``dest_dir`` and rewrites the
+    ``dataset.yaml`` ``path:`` line so it points at the destination (the original
+    absolute path would be meaningless on Colab).
+
+    Args:
+        dest_dir: Target directory (created if absent). On Colab this is under the
+            mounted Drive, e.g. ``/content/drive/MyDrive/agridrone/plantdoc``.
+        config_path: Data config, used to locate the local processed dir.
+
+    Returns:
+        Path to the copied ``dataset.yaml`` in ``dest_dir``.
+
+    Raises:
+        FileNotFoundError: If the local processed dataset does not exist yet.
+    """
+    cfg = load_config(config_path)
+    processed = resolve_path(cfg["paths"]["processed_dir"])
+    if not (processed / "dataset.yaml").exists():
+        raise FileNotFoundError(
+            f"No processed dataset at {processed}. Run `make data` first."
+        )
+
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    # Copy the dataset tree (images/, labels/, prepare_summary.json). dirs_exist_ok
+    # lets a re-sync overwrite an earlier copy in place.
+    shutil.copytree(processed, dest, dirs_exist_ok=True)
+
+    # Rewrite the absolute `path:` line to the destination so Ultralytics resolves
+    # images/ and labels/ correctly wherever the dir is mounted.
+    dst_yaml = dest / "dataset.yaml"
+    rewritten = [
+        f"path: {dest.resolve()}" if line.startswith("path:") else line
+        for line in dst_yaml.read_text(encoding="utf-8").splitlines()
+    ]
+    dst_yaml.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    print(f"[data] Synced processed dataset to {dest}")
+    return dst_yaml
+
+
 def _stats_to_dict(s: SplitStats) -> dict[str, Any]:
     return {
         "n_images": s.n_images,
@@ -388,6 +456,7 @@ def _stats_to_dict(s: SplitStats) -> dict[str, Any]:
         "n_images_without_boxes": s.n_images_without_boxes,
         "n_boxes_dropped_degenerate": s.n_boxes_dropped_degenerate,
         "n_boxes_dropped_bad_dims": s.n_boxes_dropped_bad_dims,
+        "n_boxes_dropped_excluded_class": s.n_boxes_dropped_excluded_class,
         "n_boxes_clamped": s.n_boxes_clamped,
         "n_rows_missing_image": s.n_rows_missing_image,
         "class_counts": dict(sorted(s.class_counts.items())),
@@ -403,7 +472,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--force-download", action="store_true", help="Re-download even if present."
     )
+    parser.add_argument(
+        "--drive-cache",
+        metavar="DIR",
+        help="After preparing, copy the processed dataset to DIR (e.g. a mounted "
+        "Google Drive path) for reuse on Colab.",
+    )
     args = parser.parse_args()
 
     result = prepare_dataset(args.config, force_download=args.force_download)
     print(json.dumps(result, indent=2))
+    if args.drive_cache:
+        sync_to_drive(args.drive_cache, config_path=args.config)

@@ -18,6 +18,7 @@ from agridrone.data import (
     _split_train_val,
     build_class_list,
     convert_split,
+    sync_to_drive,
     write_dataset_yaml,
 )
 
@@ -63,6 +64,13 @@ def test_build_class_list_strips_whitespace():
     train = pd.DataFrame({"class_name": [" leaf ", "leaf"]})
     test = pd.DataFrame({"class_name": ["leaf"]})
     assert build_class_list(train, test) == ["leaf"]
+
+
+def test_build_class_list_drops_excluded():
+    train = pd.DataFrame({"class_name": ["apple", "corn", "weed"]})
+    test = pd.DataFrame({"class_name": ["apple", "weed"]})
+    # excluded matched after whitespace-stripping; result stays sorted/contiguous
+    assert build_class_list(train, test, excluded=[" weed "]) == ["apple", "corn"]
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +176,29 @@ def test_convert_split_counts_clamped_boxes(tmp_path: Path):
     assert stats.n_boxes_dropped_degenerate == 0
 
 
+def test_convert_split_drops_excluded_class_boxes(tmp_path: Path):
+    src = tmp_path / "TRAIN"
+    _make_image(src / "mix.jpg", 100, 100)
+
+    df = pd.DataFrame(
+        [
+            {"filename": "mix.jpg", "width": 100, "height": 100,
+             "class_name": "rust", "xmin": 10, "ymin": 10, "xmax": 50, "ymax": 50},
+            # "weed" is not in class_to_id -> treated as an excluded class
+            {"filename": "mix.jpg", "width": 100, "height": 100,
+             "class_name": "weed", "xmin": 0, "ymin": 0, "xmax": 40, "ymax": 40},
+        ]
+    )
+    stats = convert_split(
+        df, src, tmp_path / "out/images/train", tmp_path / "out/labels/train", {"rust": 0}
+    )
+    assert stats.n_boxes == 1                       # only the rust box kept
+    assert stats.n_boxes_dropped_excluded_class == 1
+    # image is still written, with just the surviving box's label
+    label = (tmp_path / "out/labels/train/mix.txt").read_text().strip()
+    assert label.startswith("0 ") and "\n" not in label
+
+
 def test_needs_clamp_detects_in_and_out_of_bounds():
     inside = BoxRecord("a.jpg", img_w=100, img_h=100, class_name="x",
                        xmin=10, ymin=10, xmax=90, ymax=90)
@@ -185,3 +216,44 @@ def test_write_dataset_yaml_roundtrip(tmp_path: Path):
     assert parsed["nc"] == 3
     assert parsed["names"] == {0: "apple", 1: "corn", 2: "tomato"}
     assert parsed["train"] == "images/train"
+
+
+# ---------------------------------------------------------------------------
+# sync_to_drive (Colab cache helper)
+# ---------------------------------------------------------------------------
+
+
+def _write_temp_data_config(tmp_path: Path, processed: Path) -> Path:
+    import yaml
+
+    cfg = {"paths": {"processed_dir": str(processed)}}
+    cfg_path = tmp_path / "data.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return cfg_path
+
+
+def test_sync_to_drive_copies_and_rewrites_path(tmp_path: Path):
+    # Build a minimal processed dataset with an absolute path: line.
+    processed = tmp_path / "processed"
+    (processed / "images/train").mkdir(parents=True)
+    (processed / "images/train/leaf.jpg").write_bytes(b"x")
+    write_dataset_yaml(processed, ["apple", "corn"])
+    (processed / "prepare_summary.json").write_text("{}", encoding="utf-8")
+
+    cfg_path = _write_temp_data_config(tmp_path, processed)
+    dest = tmp_path / "drive/agridrone/plantdoc"
+    out = sync_to_drive(dest, config_path=cfg_path)
+
+    # Files copied over.
+    assert (dest / "images/train/leaf.jpg").exists()
+    assert (dest / "prepare_summary.json").exists()
+    # dataset.yaml path: line rewritten to the destination, not the source.
+    text = out.read_text()
+    assert f"path: {dest.resolve()}" in text
+    assert str(processed.resolve()) not in text
+
+
+def test_sync_to_drive_missing_processed_raises(tmp_path: Path):
+    cfg_path = _write_temp_data_config(tmp_path, tmp_path / "nope")
+    with pytest.raises(FileNotFoundError):
+        sync_to_drive(tmp_path / "drive", config_path=cfg_path)

@@ -8,17 +8,22 @@ VENV := .venv
 PY := PYTHONPATH= $(VENV)/bin/python
 PYTEST := PYTHONPATH= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 $(VENV)/bin/python -m pytest
 
-.PHONY: help setup setup-min data eda test lint typecheck clean
+.PHONY: help setup setup-min data eda test lint typecheck clean \
+        train-pretrain train-finetune train-baseline train-eval
 
 help:
-	@echo "make setup      - create venv + install all deps (needs internet)"
-	@echo "make setup-min  - venv + lightweight data-pipeline deps only (no torch)"
-	@echo "make data       - download + convert PlantDoc to YOLO format"
-	@echo "make eda        - generate the EDA report + plots"
-	@echo "make test       - run the test suite"
-	@echo "make lint       - ruff check"
-	@echo "make typecheck  - mypy"
-	@echo "make clean      - remove caches (keeps venv + data)"
+	@echo "make setup          - create venv + install all deps (needs internet)"
+	@echo "make setup-min      - venv + lightweight data-pipeline deps only (no torch)"
+	@echo "make data           - download + convert PlantDoc to YOLO format"
+	@echo "make eda            - generate the EDA report + plots"
+	@echo "make test           - run the test suite"
+	@echo "make lint           - ruff check"
+	@echo "make typecheck      - mypy"
+	@echo "make train-pretrain - PlantVillage backbone pretrain (needs GPU + full stack)"
+	@echo "make train-finetune - PlantDoc detector fine-tune  (needs GPU + full stack)"
+	@echo "make train-baseline - YOLOv8 baseline fine-tune     (needs GPU + full stack)"
+	@echo "make train-eval     - evaluate on TEST -> results table (needs full stack)"
+	@echo "make clean          - remove caches (keeps venv + data)"
 
 # Full setup. If your system lacks pip in venvs (Debian/PEP 668), see README
 # 'Environment setup' for the get-pip.py bootstrap.
@@ -39,6 +44,20 @@ data:
 
 eda:
 	$(PY) -m agridrone.eda --config configs/data.yaml
+
+# Training stages. These need a GPU and the full ML stack (`make setup`); they are
+# normally run on Colab via notebooks/phase2_colab.ipynb, not on the dev machine.
+train-pretrain:
+	$(PY) -m agridrone.train --config configs/train.yaml --stage pretrain
+
+train-finetune:
+	$(PY) -m agridrone.train --config configs/train.yaml --stage finetune
+
+train-baseline:
+	$(PY) -m agridrone.train --config configs/train.yaml --stage baseline
+
+train-eval:
+	$(PY) -m agridrone.train --config configs/train.yaml --stage eval
 
 test:
 	$(PYTEST)

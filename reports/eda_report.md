@@ -10,27 +10,30 @@
 
 | Split | Images | Boxes | Avg boxes/img |
 |-------|-------:|------:|--------------:|
-| train | 1990 | 7230 | 3.63 |
-| val | 352 | 1224 | 3.48 |
+| train | 1990 | 7219 | 3.63 |
+| val | 352 | 1222 | 3.47 |
 | test | 236 | 452 | 1.92 |
 
 ## Data quality (conversion drops)
 
 Counts of annotations dropped or adjusted while converting PlantDoc's CSV boxes to YOLO labels. Kept boxes exclude the dropped ones; clamped boxes are kept but had coordinates pulled back into `[0, 1]`.
 
-| Split | Kept boxes | Dropped (degenerate) | Dropped (bad dims) | Clamped | Rows w/ missing image |
-|-------|-----------:|---------------------:|-------------------:|--------:|----------------------:|
-| train | 7230 | 0 | 4 | 0 | 11 |
-| val | 1224 | 0 | 0 | 0 | 0 |
-| test | 452 | 0 | 0 | 0 | 0 |
-| **total** | **8906** | **0** | **4** | **0** | **11** |
+| Split | Kept boxes | Dropped (degenerate) | Dropped (bad dims) | Dropped (excluded class) | Clamped | Rows w/ missing image |
+|-------|-----------:|---------------------:|-------------------:|-------------------------:|--------:|----------------------:|
+| train | 7219 | 0 | 4 | 11 | 0 | 11 |
+| val | 1222 | 0 | 0 | 2 | 0 | 0 |
+| test | 452 | 0 | 0 | 0 | 0 | 0 |
+| **total** | **8893** | **0** | **4** | **13** | **0** | **11** |
 
 - **Degenerate boxes dropped:** 0 — zero/negative-area boxes (`xmax <= xmin` or `ymax <= ymin`) that carry no usable localization signal.
 - **Bad-dimension boxes dropped:** 4 — CSV rows recording image `width` or `height` as 0 (annotation errors); normalized coords are undefined.
+- **Excluded-class boxes dropped:** 13 — boxes belonging to classes removed via `excluded_classes` in the config (see below); dropped for evaluation integrity, not data quality.
 - **Boxes clamped:** 0 — boxes spilling past the image edge, kept with coordinates clamped to `[0, 1]`.
 - **Rows referencing missing images:** 11 — CSV rows whose image file was absent from the download; the whole image (and its boxes) is skipped.
 
-## Classes (29)
+## Classes (27)
+
+Excluded from this dataset for evaluation integrity: `Tomato two spotted spider mites leaf`, `Potato leaf`. Each had too little training signal *and* zero TEST-split representation, leaving no honest way to measure detection performance on them.
 
 Per-class box counts (train / val / test):
 
@@ -47,24 +50,22 @@ Per-class box counts (train / val / test):
 | 8 | Corn leaf blight | 295 | 63 | 12 |
 | 9 | Corn rust leaf | 83 | 31 | 10 |
 | 10 | Peach leaf | 548 | 62 | 10 |
-| 11 | Potato leaf | 10 | 1 | 0 |
-| 12 | Potato leaf early blight | 278 | 32 | 17 |
-| 13 | Potato leaf late blight | 211 | 29 | 10 |
-| 14 | Raspberry leaf | 434 | 105 | 17 |
-| 15 | Soyabean leaf | 216 | 30 | 20 |
-| 16 | Squash Powdery mildew leaf | 214 | 34 | 6 |
-| 17 | Strawberry leaf | 371 | 91 | 30 |
-| 18 | Tomato Early blight leaf | 175 | 20 | 19 |
-| 19 | Tomato Septoria leaf spot | 358 | 54 | 24 |
-| 20 | Tomato leaf | 294 | 75 | 27 |
-| 21 | Tomato leaf bacterial spot | 241 | 25 | 14 |
-| 22 | Tomato leaf late blight | 159 | 48 | 14 |
-| 23 | Tomato leaf mosaic virus | 179 | 46 | 36 |
-| 24 | Tomato leaf yellow virus | 744 | 43 | 42 |
-| 25 | Tomato mold leaf | 206 | 71 | 16 |
-| 26 | Tomato two spotted spider mites leaf | 1 | 1 | 0 |
-| 27 | grape leaf | 163 | 42 | 15 |
-| 28 | grape leaf black rot | 96 | 29 | 8 |
+| 11 | Potato leaf early blight | 278 | 32 | 17 |
+| 12 | Potato leaf late blight | 211 | 29 | 10 |
+| 13 | Raspberry leaf | 434 | 105 | 17 |
+| 14 | Soyabean leaf | 216 | 30 | 20 |
+| 15 | Squash Powdery mildew leaf | 214 | 34 | 6 |
+| 16 | Strawberry leaf | 371 | 91 | 30 |
+| 17 | Tomato Early blight leaf | 175 | 20 | 19 |
+| 18 | Tomato Septoria leaf spot | 358 | 54 | 24 |
+| 19 | Tomato leaf | 294 | 75 | 27 |
+| 20 | Tomato leaf bacterial spot | 241 | 25 | 14 |
+| 21 | Tomato leaf late blight | 159 | 48 | 14 |
+| 22 | Tomato leaf mosaic virus | 179 | 46 | 36 |
+| 23 | Tomato leaf yellow virus | 744 | 43 | 42 |
+| 24 | Tomato mold leaf | 206 | 71 | 16 |
+| 25 | grape leaf | 163 | 42 | 15 |
+| 26 | grape leaf black rot | 96 | 29 | 8 |
 
 ## Image sizes
 

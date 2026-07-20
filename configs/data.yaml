@@ -27,6 +27,14 @@ csv_columns:
   xmax: xmax
   ymax: ymax
 
+# Classes excluded from the final dataset for evaluation integrity (not merely
+# imbalance): each has too little training signal AND zero representation in the
+# TEST split, so there is no honest way to measure detection performance on them.
+# Dropping them leaves 27 classes. See README "Excluded classes".
+excluded_classes:
+  - "Tomato two spotted spider mites leaf"  # 1 train box, 0 test boxes
+  - "Potato leaf"                            # 10 train boxes, 0 test boxes
+
 # Original dataset splits. PlantDoc ships only TRAIN/TEST; we carve a val split
 # out of TRAIN for honest model selection (test stays untouched until final eval).
 splits:

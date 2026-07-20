@@ -1,0 +1,61 @@
+# AgriDrone Phase 2 training configuration.
+# No hardcoded paths or magic numbers in code — everything routes through here.
+#
+# Training runs on a GPU (Google Colab). The lightweight dev machine has no torch,
+# so `agridrone.train` guards its ultralytics import and this file is only fully
+# exercised on Colab. See README "Phase 2".
+
+# --- Models -----------------------------------------------------------------
+# YOLO26 is the primary detector; YOLOv8 is the honest baseline to compare against.
+# Weights auto-download from Ultralytics on first use.
+models:
+  detector: yolo26n.pt        # primary detector (COCO-pretrained), fine-tuned on PlantDoc
+  baseline: yolov8n.pt        # baseline for an apples-to-apples mAP comparison
+  # Classification variant used for the PlantVillage backbone pretrain step.
+  classifier: yolo26n-cls.pt  # ImageNet-pretrained classifier (-cls suffix)
+
+# --- Shared training hyperparameters ---------------------------------------
+train:
+  epochs: 100
+  imgsz: 640
+  batch: 16            # safe for a free-tier Colab T4; raise on bigger GPUs
+  seed: 42             # deterministic runs
+  device: 0            # GPU index; set to "cpu" only for a tiny smoke test
+  patience: 20         # early-stop if val mAP stalls for this many epochs
+  workers: 4
+
+# --- PlantVillage backbone pretrain (step 1 of pretrain->finetune) ----------
+# Pretrain the backbone as an image classifier on PlantVillage (large, related
+# leaf/disease imagery), then transfer its backbone into the detector. This gives
+# the detector better features than PlantDoc's ~2.6k images can supply alone.
+# PlantVillage is used ONLY for feature pretraining — never as detection labels.
+pretrain:
+  enabled: true
+  # PlantVillage classification dataset. Provide either a local/Drive dir laid out
+  # as ImageFolder (one subdir per class) or leave blank to skip until supplied.
+  dataset_dir: ""                       # e.g. /content/drive/MyDrive/agridrone/plantvillage
+  epochs: 30
+  imgsz: 224                            # classification resolution
+  # Where the pretrained classifier checkpoint is written / read from.
+  backbone_weights: models/pretrain/plantvillage_cls.pt
+
+# --- Class imbalance: weighted oversampling dataloader ----------------------
+# PlantDoc's kept 27 classes are heavily skewed. Rather than reweighting the loss
+# (no built-in flag for Ultralytics detection in 8.4.x, and it can cause gradient
+# spikes), we oversample images containing rare classes. See agridrone.weighting.
+weighting:
+  enabled: true
+  agg_func: mean       # how per-box class weights combine per image: mean|max|median|sum
+
+# --- Data -------------------------------------------------------------------
+data:
+  # Processed YOLO dataset produced by `make data`. On Colab, point this at the
+  # Drive-cached copy (convert once locally, sync to Drive) to skip the ~995 MB
+  # re-download each session. Falls back to the local processed dir if unset.
+  drive_dataset_dir: ""                 # e.g. /content/drive/MyDrive/agridrone/plantdoc
+  dataset_yaml: data/processed/plantdoc/dataset.yaml   # fallback (local convert)
+
+# --- Outputs ----------------------------------------------------------------
+output:
+  runs_dir: runs                        # Ultralytics run artifacts (weights, curves)
+  results_table: reports/phase2_results.md   # per-class AP + aggregate mAP table

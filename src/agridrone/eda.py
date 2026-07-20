@@ -243,29 +243,31 @@ def _render_markdown(
         )
         lines.append(
             "| Split | Kept boxes | Dropped (degenerate) | Dropped (bad dims) | "
-            "Clamped | Rows w/ missing image |"
+            "Dropped (excluded class) | Clamped | Rows w/ missing image |"
         )
         lines.append(
             "|-------|-----------:|---------------------:|-------------------:|"
-            "--------:|----------------------:|"
+            "-------------------------:|--------:|----------------------:|"
         )
-        tot = {"kept": 0, "deg": 0, "dims": 0, "clamp": 0, "miss": 0}
+        tot = {"kept": 0, "deg": 0, "dims": 0, "excl": 0, "clamp": 0, "miss": 0}
         for s in ["train", "val", "test"]:
             st = prepare_summary["splits"].get(s, {})
             kept = int(st.get("n_boxes", 0))
             deg = int(st.get("n_boxes_dropped_degenerate", 0))
             dims = int(st.get("n_boxes_dropped_bad_dims", 0))
+            excl = int(st.get("n_boxes_dropped_excluded_class", 0))
             clamp = int(st.get("n_boxes_clamped", 0))
             miss = int(st.get("n_rows_missing_image", 0))
             tot["kept"] += kept
             tot["deg"] += deg
             tot["dims"] += dims
+            tot["excl"] += excl
             tot["clamp"] += clamp
             tot["miss"] += miss
-            lines.append(f"| {s} | {kept} | {deg} | {dims} | {clamp} | {miss} |")
+            lines.append(f"| {s} | {kept} | {deg} | {dims} | {excl} | {clamp} | {miss} |")
         lines.append(
             f"| **total** | **{tot['kept']}** | **{tot['deg']}** | **{tot['dims']}** | "
-            f"**{tot['clamp']}** | **{tot['miss']}** |"
+            f"**{tot['excl']}** | **{tot['clamp']}** | **{tot['miss']}** |"
         )
         lines.append("")
         lines.append(
@@ -273,6 +275,9 @@ def _render_markdown(
             "(`xmax <= xmin` or `ymax <= ymin`) that carry no usable localization signal.\n"
             f"- **Bad-dimension boxes dropped:** {tot['dims']} — CSV rows recording image "
             "`width` or `height` as 0 (annotation errors); normalized coords are undefined.\n"
+            f"- **Excluded-class boxes dropped:** {tot['excl']} — boxes belonging to classes "
+            "removed via `excluded_classes` in the config (see below); dropped for "
+            "evaluation integrity, not data quality.\n"
             f"- **Boxes clamped:** {tot['clamp']} — boxes spilling past the image edge, "
             "kept with coordinates clamped to `[0, 1]`.\n"
             f"- **Rows referencing missing images:** {tot['miss']} — CSV rows whose image "
@@ -286,6 +291,14 @@ def _render_markdown(
         )
 
     lines.append(f"## Classes ({len(class_names)})\n")
+    excluded = (prepare_summary or {}).get("excluded_classes") or []
+    if excluded:
+        joined = ", ".join(f"`{e}`" for e in excluded)
+        lines.append(
+            f"Excluded from this dataset for evaluation integrity: {joined}. Each had too "
+            "little training signal *and* zero TEST-split representation, leaving no honest "
+            "way to measure detection performance on them.\n"
+        )
     lines.append("Per-class box counts (train / val / test):\n")
     lines.append("| ID | Class | Train | Val | Test |")
     lines.append("|---:|-------|------:|----:|-----:|")
