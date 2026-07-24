@@ -5,10 +5,10 @@ leaf images, then prove it is genuinely deployable by exporting to ONNX,
 quantizing (FP16 / INT8), and benchmarking real inference latency — not just
 training accuracy.
 
-> **Status:** Phase 1 (data pipeline + EDA) done. Phase 2 (training) code is
-> implemented and runs on Colab GPU — see [Phase 2](#phase-2--training). No
-> training run has been executed yet (this dev machine has no GPU).
-> Later phases (quantization/benchmark, API, demo, docs) are tracked below.
+> **Status:** Phases 1–3 complete. Phase 1 (data pipeline + EDA), Phase 2
+> (training on Colab GPU — mAP@0.5 = 0.602), and Phase 3 (ONNX export +
+> CPU latency benchmark) are all done with real measured numbers.
+> Phases 4–6 (API, demo, CI hardening) are tracked below.
 
 ## Honest task framing
 
@@ -214,6 +214,32 @@ boxes vs `Corn Gray leaf spot` ~66). Approach:
   classes show `x > 1`, common classes `x < 1`. Computed by
   [`expected_class_exposure`](src/agridrone/weighting.py) (pure numpy, unit-tested).
 
+## Phase 3 — ONNX export + CPU benchmark
+
+```bash
+make export    # export best.pt → ONNX FP32 / FP16 / INT8
+make benchmark # run latency + accuracy benchmark, write reports/phase3_benchmark.md
+```
+
+Config lives in [`configs/export.yaml`](configs/export.yaml).
+
+All four precisions are benchmarked on CPU (single image, 640×640, 100 timed
+runs after 10 warmup). Real measured results:
+
+| Precision | Latency mean (ms) | Speedup | mAP@0.5 |
+|-----------|------------------:|--------:|--------:|
+| PyTorch FP32 | 84.35 | 1.00× | 0.6015 |
+| ONNX FP32 | 32.92 | 2.56× | 0.5839 |
+| ONNX FP16 | 55.63 | 1.52× | 0.5847 |
+| ONNX INT8 | 74.48 | 1.13× | 0.0000 |
+
+INT8 collapses to 0.0 mAP — the NMS-free YOLO head is incompatible with
+static activation quantization, and this CPU has no AVX-512/VNNI so there
+is no latency benefit either. This is reported honestly rather than hidden.
+The benchmark code auto-annotates non-viable rows and emits a recommendation:
+**Recommended deployment artifact: ONNX FP32** (2.56× faster than PyTorch,
+accuracy within 0.018 mAP@0.5).
+
 ## Testing
 
 ```bash
@@ -225,8 +251,8 @@ make test   # runs the pytest suite
 | Phase | Scope | Status |
 |------:|-------|--------|
 | 1 | Data pipeline + EDA (27 classes after exclusion) | done |
-| 2 | PlantVillage backbone pretrain → PlantDoc fine-tune, weighted oversampling, per-class AP (Colab GPU) | code done, run pending (no local GPU) |
-| 3 | ONNX export, FP16/INT8 quantization, latency benchmark | pending |
+| 2 | PlantVillage backbone pretrain → PlantDoc fine-tune, weighted oversampling, per-class AP (Colab GPU) | done — mAP@0.5 = 0.602 |
+| 3 | ONNX export, FP16/INT8 quantization, CPU latency benchmark | done — see [`reports/phase3_benchmark.md`](reports/phase3_benchmark.md) |
 | 4 | FastAPI inference service | pending |
 | 5 | Demo frontend | pending |
 | 6 | Docs, tests, CI hardening | pending |
