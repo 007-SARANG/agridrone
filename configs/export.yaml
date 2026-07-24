@@ -1,0 +1,62 @@
+# AgriDrone Phase 3 configuration — ONNX export, quantization, benchmarking.
+# No hardcoded paths or magic numbers in code — everything routes through here.
+#
+# This phase runs entirely on CPU (the dev laptop has no GPU). That is deliberate:
+# the deployment story is "provably fast on commodity CPU", so every latency
+# number in the benchmark comes from a real run on this machine, not an estimate.
+
+# --- Model ------------------------------------------------------------------
+# The fine-tuned YOLO26n detector from Phase 2 (trained on Colab, copied here).
+model:
+  weights: models/plantdoc_yolo26_best.pt
+  imgsz: 640          # inference resolution; must match how latency is measured
+
+# --- Dataset (for accuracy eval + INT8 calibration) -------------------------
+# Reuses the Phase 1 processed YOLO layout. Accuracy is measured on the untouched
+# TEST split; INT8 calibration draws from TRAIN only (never test/val), so the
+# accuracy number stays honest.
+data:
+  dataset_yaml: data/processed/plantdoc/dataset.yaml
+
+# --- Export -----------------------------------------------------------------
+export:
+  opset: 17                          # ONNX opset; 17 is broadly supported by ORT
+  dynamic: false                     # fixed input shape -> best CPU latency
+  simplify: true                     # run onnxslim graph simplification
+  out_dir: models/onnx               # exported .onnx files land here (gitignored)
+
+# --- INT8 static quantization -----------------------------------------------
+# Static (calibration-based) quantization needs representative images to observe
+# activation ranges. We use a fixed random subset of TRAIN images.
+quantize:
+  calibration:
+    split: train                     # calibrate on TRAIN only — never test/val
+    n_images: 150                    # enough to estimate activation ranges
+    seed: 42                         # deterministic subset selection
+  # onnxruntime quantization settings.
+  per_channel: true                  # per-channel weights = less accuracy loss
+  reduce_range: false
+  # Detection-head protection. YOLO26 ships an NMS-free end-to-end head whose
+  # box/score decode is baked into the ONNX graph. Quantizing those layers to
+  # INT8 collapses detections (mAP -> 0). We keep the head in FP32 by excluding
+  # every node upstream of the head "marker" ops (which exist only in the head)
+  # within `exclude_head_depth` hops. Set exclude_head: false to quantize all.
+  exclude_head: true
+  head_marker_ops: [TopK, GatherElements, Softmax, NonMaxSuppression]
+  exclude_head_depth: 40             # how many hops upstream of markers to protect
+
+# --- Benchmark --------------------------------------------------------------
+# Which precisions to time + score. FP16 is included even though it typically
+# gives ~no speedup on CPU (ORT upcasts to FP32) — that is itself an honest
+# finding worth showing, not a reason to hide the row.
+benchmark:
+  precisions: [pytorch_fp32, onnx_fp32, onnx_fp16, onnx_int8]
+  device: cpu
+  warmup: 10                         # untimed warmup runs (JIT/allocator warmup)
+  runs: 100                          # timed runs; latency = per-image ms
+  seed: 42
+
+# --- Outputs ----------------------------------------------------------------
+output:
+  report: reports/phase3_benchmark.md    # results table (README centerpiece)
+  plots_dir: reports/phase3_plots        # latency / size / accuracy bar charts
