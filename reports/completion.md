@@ -1,5 +1,24 @@
 # AgriDrone — implementation and verification handoff
 
+## CI follow-up — 2026-10-05
+
+The initial verification snapshot below predates the first GitHub CI run:
+https://github.com/007-SARANG/agridrone/actions/runs/37277142714
+
+Both Python jobs (3.11/3.12) passed, including required API tests. The CPU
+Docker build and dependency assertions passed. The startup smoke failed on its
+first HTTP request with `ConnectionResetError`; the container port can be
+published before Uvicorn accepts requests. The original wait only caught
+`URLError`, so the reset terminated it immediately instead of retrying.
+
+`docker/smoke.py` now retries connection resets, disconnects and timeouts within
+the existing 90-second startup deadline. Missing-model readiness and packaged
+demo assertions remain required. New regression coverage in
+`docker/tests/test_smoke.py` proves recovery, deadline failure, and that invalid
+liveness or unexpectedly ready missing models still fail. Local deployment
+tests: 10 passed; Ruff and mypy passed. This repair is not yet verified in a new
+remote CI/container run; commit and push it to trigger that verification.
+
 ## Outcome
 
 The existing portfolio project now has an end-to-end local CPU workflow:
