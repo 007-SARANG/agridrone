@@ -1,0 +1,12 @@
+# Shared HTTP dependencies for lightweight tests and CPU serving.
+# Keep NumPy below 2.1 for the recorded Colab/numba environment and ABI stability.
+numpy==2.0.2
+Pillow==11.0.0
+PyYAML==6.0.2
+# FastAPI's older Starlette cap excludes the FileResponse Range DoS fix.
+# GHSA-7f5h-v6xp-fcq8: Starlette >=0.49.1 is required for the static demo.
+fastapi==0.121.3
+starlette==0.50.0
+uvicorn==0.32.1
+# GHSA-wp53-j4wj-2cfg is fixed in 0.0.22 (non-default upload configurations).
+python-multipart==0.0.22

@@ -1,0 +1,21 @@
+# Strict allowlist: models, datasets, git history, runs, attachments, local
+# settings, virtualenvs and credentials never enter the build context.
+**
+!docker/
+!docker/Dockerfile
+!docker/healthcheck.py
+!pyproject.toml
+!README.md
+!requirements-runtime.lock.txt
+!src/
+!src/agridrone/
+!src/agridrone/*.py
+!api/
+!api/*.py
+!configs/
+!configs/serve.yaml
+!frontend/
+!frontend/index.html
+!frontend/app.js
+!frontend/core.mjs
+!frontend/styles.css

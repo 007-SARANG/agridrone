@@ -5,34 +5,66 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install lightweight deps
-        # Phase-1 tests exercise the data pipeline only; torch/ultralytics are
-        # not needed here and would make CI slow. Heavier training/inference
-        # tests get their own job in later phases.
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas numpy Pillow matplotlib PyYAML pytest ruff
-
-      - name: Lint
-        run: ruff check src tests
-
-      - name: Run tests
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.14.0"
+      - name: Install pinned lightweight test and API dependencies
+        run: make setup-min PYTHON=${{ matrix.python-version }}
+      - name: Validate Compose configuration
+        run: docker compose -f docker/compose.yaml config --quiet
+      - name: Check tests, frontend, lint and types
+        run: make check
+      - name: Require the API contract suite (no optional-dependency skips)
         env:
+          PYTHONPATH: ""
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: pytest
+        run: |
+          .venv/bin/python -m pytest tests/test_api.py --junitxml=/tmp/api-tests.xml
+          .venv/bin/python -c 'import xml.etree.ElementTree as E; s=list(E.parse("/tmp/api-tests.xml").iter("testsuite")); assert s and sum(int(x.get("tests", 0)) for x in s)>0; assert all(int(x.get("skipped", 0))==0 for x in s), "API tests must not skip"'
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          tags: agridrone:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify CPU dependencies and missing-model contract
+        run: |
+          docker run --rm --entrypoint python agridrone:ci -c 'import os, torch, torchvision, ultralytics; assert os.getuid() != 0; assert torch.__version__ == "2.5.1+cpu"; assert torchvision.__version__ == "0.20.1+cpu"; assert torch.version.cuda is None; assert ultralytics.__version__ == "8.4.52"'
+          docker run -d --name agridrone-ci --read-only --tmpfs /tmp:rw,size=256m --cap-drop ALL --security-opt no-new-privileges --publish 127.0.0.1:8000:8000 agridrone:ci
+          python docker/smoke.py
+          if docker exec agridrone-ci python /app/docker/healthcheck.py; then
+            echo "Missing model must fail the readiness healthcheck"
+            exit 1
+          fi
+      - name: Container logs and cleanup
+        if: always()
+        run: |
+          docker logs agridrone-ci || true
+          docker rm -f agridrone-ci || true

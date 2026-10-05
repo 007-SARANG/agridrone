@@ -1,0 +1,42 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    # The pinned PyTorch 2.5.1 +cpu wheels target Linux x86_64.
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      AGRIDRONE_MODEL: /app/models/model.onnx
+      YOLO_AUTOINSTALL: "false"
+      YOLO_CONFIG_DIR: /tmp/ultralytics
+      MPLCONFIGDIR: /tmp/matplotlib
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    volumes:
+      - type: bind
+        source: ${AGRIDRONE_MODEL_HOST:-../models/onnx/plantdoc_yolo26_best_fp32.onnx}
+        target: /app/models/model.onnx
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 128
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3

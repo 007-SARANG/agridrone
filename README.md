@@ -5,10 +5,10 @@ leaf images, then prove it is genuinely deployable by exporting to ONNX,
 quantizing (FP16 / INT8), and benchmarking real inference latency — not just
 training accuracy.
 
-> **Status:** Phases 1–3 complete. Phase 1 (data pipeline + EDA), Phase 2
-> (training on Colab GPU — mAP@0.5 = 0.602), and Phase 3 (ONNX export +
-> CPU latency benchmark) are all done with real measured numbers.
-> Phases 4–6 (API, demo, CI hardening) are tracked below.
+> **Status:** All six implementation phases are delivered: data, training,
+> measured ONNX benchmarking, API, browser demo, and deployment/CI tooling.
+> Real ONNX inference has been checked locally. Docker execution still requires
+> verification on a Docker-enabled host; see [verification](reports/completion.md).
 
 ## Honest task framing
 
@@ -23,8 +23,8 @@ It deliberately does **not** use PlantVillage *for detection*. PlantVillage is a
 *classification-only* dataset — every image is a single leaf on a plain
 background with no bounding boxes — so training a "detector" on it would just
 learn "the leaf is in the middle of the frame." That would be a dishonest
-localization story. (PlantVillage *is* used to pretrain the detector's backbone
-as a classifier — see [Phase 2](#phase-2--training).
+localization story. (The pipeline supports optional PlantVillage pretraining of
+the detector's backbone as a classifier — see [Phase 2](#phase-2--training).
 That's an honest use of classification data: it improves learned features
 without ever pretending to supply localization labels.) PlantDoc is smaller and
 noisier, so mAP will be modest, and that number is reported as-is rather than
@@ -56,8 +56,8 @@ src/agridrone/     # all production code (data, train, evaluate, export, infer, 
 configs/           # YAML configs — no hardcoded paths or magic numbers in code
 data/              # raw/ + processed/ (gitignored; created by the download script)
 notebooks/         # Colab training notebooks (exploration + GPU training only)
-api/               # FastAPI inference service (Phase 4)
-frontend/          # demo UI (Phase 5)
+api/               # compatibility shim; implementation in src/agridrone/serving.py
+frontend/          # static demo UI and Node regression tests (Phase 5)
 tests/             # pytest suite
 reports/           # EDA report + benchmark results (committed)
 docker/            # Dockerfile + compose (Phase 6)
@@ -66,44 +66,35 @@ docker/            # Dockerfile + compose (Phase 6)
 
 ## Environment setup
 
-Requires **Python 3.11+**. Training runs on **Colab GPU** (this dev machine has
-no dedicated GPU); the laptop is used for CPU-side benchmarking.
+Use **Python 3.11 or 3.12**, `uv`, Make, and Node.js 22+ for frontend tests.
+Python 3.14 is incompatible with the pinned PyTorch stack. Training uses Colab
+GPU; serving and benchmark verification use CPU.
 
-### Standard setup
+### Arch Linux / fish quick start
 
-```bash
-make setup        # create .venv and install everything (requirements-dev.txt)
-```
+Install missing tools with `sudo pacman -S uv make nodejs`. Then, from this repo:
 
-### Debian/Ubuntu note (PEP 668 / externally-managed Python)
-
-If `python3 -m venv` fails with an `ensurepip`/externally-managed error, install
-the venv package once, then set up:
-
-```bash
-sudo apt install python3.12-venv     # one-time, needs sudo
+```fish
+uv python install 3.12
 make setup
+and make check
+and make api
 ```
 
-If you cannot use `apt`, bootstrap pip into an isolated venv without touching
-system Python:
+Open **http://localhost:8000/**. `make api` stays in the foreground; Ctrl-C stops it.
+No environment activation is needed. `uv` supplies the interpreter independently
+of Arch's system Python, and setup repairs missing pip inside the venv. An
+existing wrong-version venv is never deleted: use `make setup VENV=.venv312`
+and pass `VENV=.venv312` to subsequent Make commands instead.
 
-```bash
-python3 -m venv --without-pip .venv
-curl -fsSL https://bootstrap.pypa.io/get-pip.py | .venv/bin/python -
-.venv/bin/python -m pip install -r requirements-dev.txt
-```
+For lightweight development without the ML stack, use `make setup-min` then
+`make check`. The demo and API start, but predictions need the ML runtime and
+trained model. Full setup installs the pinned training/dev lock; Docker uses a
+separate, CPU-only runtime lock. Locks include transitive dependencies; update
+them intentionally with `uv pip compile` rather than broad upgrades.
 
-> **ROS users:** if your shell sources a ROS 2 workspace, it exports
-> `PYTHONPATH` and leaks system packages into the venv. Every `make` target
-> already clears `PYTHONPATH`; run project commands via `make` (or prefix with
-> `PYTHONPATH=`) to avoid this.
-
-### Lightweight setup (data pipeline + tests only, no PyTorch)
-
-```bash
-make setup-min    # pandas/numpy/Pillow/matplotlib/PyYAML/pytest only
-```
+> **ROS users:** all Make Python commands clear `PYTHONPATH`. For direct commands
+> in either fish or Bash, use `env PYTHONPATH= .venv/bin/python ...`.
 
 ## Phase 1 — data pipeline
 
@@ -127,10 +118,13 @@ Config lives in [`configs/data.yaml`](configs/data.yaml).
 Training code lives in [`agridrone.train`](src/agridrone/train.py) and is driven
 by [`configs/train.yaml`](configs/train.yaml). It needs a GPU and the full ML
 stack, so it is run on Colab via
-[`notebooks/phase2_colab.ipynb`](notebooks/phase2_colab.ipynb). No training run
-has been executed yet — this dev machine has no GPU. The module imports cleanly
-without torch/ultralytics (the ML imports are guarded) so the logic stays
-unit-tested here.
+[`notebooks/phase2_colab.ipynb`](notebooks/phase2_colab.ipynb). The trained
+detector and recorded Phase 3 evaluation exist (PyTorch mAP@0.5 = 0.6015).
+The module imports without torch/ultralytics so helper logic stays unit-tested.
+The repository does not contain a Phase 2 per-class/baseline comparison report;
+optional pretraining and baseline commands below are supported workflows, not
+evidence that every experiment was run. Preserve the Colab run artifacts when
+making claims about their provenance.
 
 ```bash
 # On a GPU box (or Colab) after `make setup`:
@@ -153,8 +147,8 @@ Ultralytics resolves images wherever the folder is mounted.
 
 ### Pretrain-then-finetune (PlantVillage → PlantDoc)
 
-The detector backbone is first pretrained as an image **classifier** on
-**PlantVillage**, then the full detection model is fine-tuned on PlantDoc.
+The optional workflow first pretrains the detector backbone as an image
+**classifier** on **PlantVillage**, then fine-tunes the detector on PlantDoc.
 
 *Why:* PlantDoc is small (~2.6k images) and noisy, which limits how good the
 backbone's learned features can get from detection data alone. PlantVillage is
@@ -233,9 +227,9 @@ runs after 10 warmup). Real measured results:
 | ONNX FP16 | 55.63 | 1.52× | 0.5847 |
 | ONNX INT8 | 74.48 | 1.13× | 0.0000 |
 
-INT8 collapses to 0.0 mAP — the NMS-free YOLO head is incompatible with
-static activation quantization, and this CPU has no AVX-512/VNNI so there
-is no latency benefit either. This is reported honestly rather than hidden.
+This INT8 export collapses to 0.0 mAP and is slower than ONNX FP32.
+That makes this artifact unsuitable for deployment; it does not prove that
+every YOLO26 quantization approach fails. The cause requires further investigation.
 The benchmark code auto-annotates non-viable rows and emits a recommendation:
 **Recommended deployment artifact: ONNX FP32** (2.56× faster than PyTorch,
 accuracy within 0.018 mAP@0.5).
@@ -244,18 +238,110 @@ accuracy within 0.018 mAP@0.5).
 
 ```bash
 make test   # runs the pytest suite
+make test-frontend
+make lint
+make typecheck
+# or all of the above:
+make check
 ```
+
+Opt-in real model smoke (no downloads; uses a synthetic image by default):
+
+```fish
+env PYTHONPATH= PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 AGRIDRONE_REAL_MODEL_TEST=1 .venv/bin/python -m pytest tests/test_serving_integration.py
+```
+
+Set `AGRIDRONE_SMOKE_IMAGE` to a local crop photo to check that image instead.
+This checks the inference contract, **not accuracy**. The regular suite uses
+fakes and tests malformed uploads, EXIF, limits, readiness, concurrency and
+cancellation; frontend tests exercise mocked DOM upload/filter/error flows.
+
+## Phase 4 — FastAPI inference service
+
+The API serves the recommended ONNX FP32 artifact and loads it lazily on the
+first prediction request. Start it with:
+
+```bash
+make api
+```
+
+- `GET /health` is cheap liveness; HTTP 200 does **not** prove model availability.
+- `GET /ready` warms up the model once and returns 200 only after inference works.
+- `POST /predict` accepts a JPEG, PNG, or WebP upload in the `file` field and
+  returns image dimensions plus detections (`class_id`, `class_name`,
+  `confidence`, and pixel-space `[x1, y1, x2, y2]` boxes).
+- Set `AGRIDRONE_MODEL` to override the default model artifact path.
+- YAML settings live in `configs/serve.yaml`; select another with
+  `AGRIDRONE_SERVE_CONFIG`. Restart the server after changing settings/artifacts.
+- Defaults: 20 MiB file, 21 MiB total request, 4096² image pixels, confidence 0.25.
+  Oversized input returns 413, bad image 400, unsupported format 415, missing file
+  422, unavailable/busy model 503, and inference failure 500. Busy replies carry
+  `Retry-After: 1`. One worker serializes inference without blocking health checks.
+
+The exported model is intentionally not committed because model artifacts are
+ignored by git. Run Phase 3 export first, or place the artifact at
+`models/onnx/plantdoc_yolo26_best_fp32.onnx`.
+
+## Phase 5 — Browser demo
+
+Opening `http://localhost:8000/` after `make api` shows the demo UI. It supports
+image preparation, loading status, scaled boxes, confidence scores, malformed
+responses, and clear API/network errors. The 25–100% confidence slider filters
+cached results without more inference and keeps boxes/list numbering aligned.
+It cannot recover detections below the API's 0.25 floor. Keep the default API
+floor/limits for this demo, or update its controls alongside custom configuration.
+
+Photos are oriented and resized to at most 4096 pixels on the longest edge,
+then encoded as PNG before upload. Coordinates refer to these prepared pixels.
+Uploads are not persisted by application code. No frontend build is needed.
+Scores are not calibrated disease probabilities; conflicting labels and missed
+detections remain possible. An empty result does not mean a plant is healthy.
+This is a portfolio demonstration, not agronomic advice or an autonomous drone.
+
+## Phase 6 — CPU deployment and CI
+
+With Docker Engine access and the Compose plugin, from the repository root:
+
+```fish
+docker compose version
+make docker-up
+docker compose -f docker/compose.yaml ps
+curl --fail http://localhost:8000/ready
+```
+
+Open http://localhost:8000/ and upload a crop photo. `make docker-down` stops it.
+Stop a locally running `make api` first to free port 8000. On Arch the Compose
+package is `docker-compose`; Docker daemon setup/access is managed by your host
+administrator (membership in the Docker group grants root-equivalent access).
+
+Compose requires the existing ONNX file and mounts it **read-only**. Override it
+in fish with `set -x AGRIDRONE_MODEL_HOST /absolute/path/model.onnx` before starting.
+Missing files fail rather than creating an empty directory. Model artifacts are
+deliberately excluded from git and the Docker build context; obtain your trained
+artifact or run the documented training/export pipeline. Only load trusted models.
+
+The Linux x86_64 image uses CPU Torch, a non-root user, a read-only filesystem,
+bounded temporary storage and resources, and a readiness healthcheck. Compose
+binds to loopback only. The app has no authentication or multi-tenant guarantees;
+before Internet exposure, add TLS, authentication, rate limits, request/time
+limits and monitoring at a reverse proxy. Do not expose it directly as-is.
+
+CI runs locked lightweight Python 3.11/3.12 checks and Node tests, explicitly
+requires API tests to execute, builds the CPU Docker image, and smoke-tests its
+missing-model behavior (`/health=200`, `/ready=503`). CI cannot validate private
+weights; run the opt-in model smoke separately. A workflow being present does
+not mean a remote CI run or Docker build has passed—see the verification report.
 
 ## Roadmap
 
 | Phase | Scope | Status |
 |------:|-------|--------|
 | 1 | Data pipeline + EDA (27 classes after exclusion) | done |
-| 2 | PlantVillage backbone pretrain → PlantDoc fine-tune, weighted oversampling, per-class AP (Colab GPU) | done — mAP@0.5 = 0.602 |
+| 2 | Detector training; optional pretraining, balancing and evaluation tooling | trained detector available — mAP@0.5 = 0.6015; optional experiment reports not included |
 | 3 | ONNX export, FP16/INT8 quantization, CPU latency benchmark | done — see [`reports/phase3_benchmark.md`](reports/phase3_benchmark.md) |
-| 4 | FastAPI inference service | pending |
-| 5 | Demo frontend | pending |
-| 6 | Docs, tests, CI hardening | pending |
+| 4 | FastAPI inference service | implemented and tested — `src/agridrone/serving.py` |
+| 5 | Demo frontend | done — `frontend/`, served at `/` |
+| 6 | Docs, tests, CI and CPU Docker deployment | implemented; local checks pass, Docker runtime verification pending host access |
 
 ## License / attribution
 

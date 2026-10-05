@@ -1,0 +1,7 @@
+# Docker installs torch/torchvision from the CPU wheel index BEFORE this file.
+# The +cpu builds satisfy these versions; do not replace them with CUDA wheels.
+-r requirements-api.txt
+ultralytics==8.4.52
+torch==2.5.1
+torchvision==0.20.1
+onnxruntime==1.20.1

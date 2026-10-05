@@ -158,7 +158,8 @@ def enable_weighted_sampling(
     import ultralytics.data.build as build  # noqa: PLC0415
 
     weighted_cls = make_weighted_dataset_class(agg=agg, power=power, max_ratio=max_ratio)
-    build.YOLODataset = weighted_cls
+    # Intentional runtime class replacement; not a reassignment of a static type.
+    setattr(build, "YOLODataset", weighted_cls)  # noqa: B010
     print(
         f"[train] Weighted oversampling enabled "
         f"(agg={agg}, power={power}, max_ratio={max_ratio})."

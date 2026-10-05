@@ -192,7 +192,10 @@ def _time_pytorch(
     from ultralytics import YOLO  # noqa: PLC0415
 
     model = YOLO(str(weights))
-    torch_model = model.model.eval()
+    torch_model = model.model
+    if not isinstance(torch_model, torch.nn.Module):
+        raise TypeError("Expected a PyTorch module for the PyTorch latency benchmark")
+    torch_model = torch_model.eval()
     x = torch.rand(1, 3, imgsz, imgsz)
     with torch.no_grad():
         for _ in range(warmup):

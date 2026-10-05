@@ -46,3 +46,4 @@ reports/scratch/
 
 # --- Agent / tooling local state ---
 .claude/
+.opencode/omnirush/

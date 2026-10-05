@@ -17,4 +17,10 @@ and honest, real benchmark numbers matter more than moving fast.
 - Every new feature gets a test in tests/ before being considered done.
 
 ## Current phase
-Just Starting
+All six implementation phases delivered. Production serving is in
+src/agridrone/serving.py; api/main.py is a compatibility shim. Static browser
+assets are in frontend/. Use Python 3.11/3.12 (not system Python 3.14).
+Run make setup with uv, then make check and make api. Serving is CPU ONNX FP32.
+Docker and CI are configured; see reports/completion.md for actual verification
+and remaining environment constraints. Never equate implemented workflows with
+completed optional training experiments or unrun deployment checks.

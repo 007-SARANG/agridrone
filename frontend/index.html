@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#153f32">
+    <title>AgriDrone · Crop detection demo</title>
+    <link rel="stylesheet" href="/demo-assets/styles.css">
+    <script type="module" src="/demo-assets/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to demo</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="AgriDrone home"><span class="brand-mark" aria-hidden="true">A</span> AgriDrone</a>
+      <span class="badge">Computer vision portfolio</span>
+    </header>
+    <main id="main">
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">From image to insight</p>
+        <h1 id="page-title">A closer look<br>at crop health.</h1>
+        <p class="lede">Explore crop disease detection. Upload a crop photo to see the model’s predicted labels, bounding boxes, and confidence scores.</p>
+      </section>
+      <div class="workspace">
+        <section class="panel upload-panel" aria-labelledby="upload-title">
+          <div class="section-heading"><span class="step">01</span><h2 id="upload-title">Choose an image</h2></div>
+          <form id="prediction-form">
+            <label class="upload-label" for="image-input"><span class="upload-symbol" aria-hidden="true">↥</span><strong>Start with a crop photo</strong><span>JPEG, PNG, or WebP · up to 20 MiB</span></label>
+            <input id="image-input" name="image" type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" aria-describedby="upload-help file-info">
+            <p id="upload-help" class="hint">Use a clear, well-lit image. The photo is sent to this server only when you select Run detection.</p>
+            <p id="file-info" class="file-info">No image selected</p>
+            <button id="run-button" type="submit" disabled>Run detection <span aria-hidden="true">↗</span></button>
+          </form>
+          <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true">Choose an image to begin.</p>
+          <p id="error" class="error" role="alert" hidden></p>
+          <div class="note"><h3>A model prediction, not a diagnosis</h3><p>This is a portfolio demonstration, not agronomic advice. Predictions can be incorrect or incomplete. Consult a qualified crop specialist before making treatment decisions.</p></div>
+        </section>
+        <section class="panel preview-panel" aria-labelledby="preview-title" id="output" aria-busy="false">
+          <div class="section-heading"><span class="step">02</span><h2 id="preview-title">Image & predictions</h2><span id="count" class="count">Awaiting image</span></div>
+          <div class="preview-surface">
+            <div id="placeholder" class="placeholder"><span class="frame-icon" aria-hidden="true">⌑</span><strong>Your image goes here</strong><p>Detected regions will appear as numbered boxes.</p></div>
+            <canvas id="preview" hidden role="img" aria-label="Selected crop image. No predictions yet."></canvas>
+          </div>
+          <div class="results-heading"><h3>Predictions</h3><span>Model confidence</span></div>
+          <div class="confidence-control">
+            <div class="confidence-heading"><label for="confidence-filter">Minimum model confidence</label><output id="confidence-value" for="confidence-filter">25%</output></div>
+            <input id="confidence-filter" type="range" min="25" max="100" step="1" value="25" disabled aria-describedby="confidence-help" aria-controls="preview results count" aria-valuetext="25% minimum model confidence">
+            <p id="confidence-help" class="hint">Filters cached predictions without another upload or inference. Confidence is a model score, not a calibrated probability of disease. The API returns scores of at least 0.25 (25%); this filter cannot recover detections below that floor. No displayed boxes does not mean the crop is healthy.</p>
+          </div>
+          <p id="results-help" class="hint">Run detection to explore the model’s output. Confidence is a model score, not a calibrated probability of disease.</p>
+          <ol id="results" class="results" aria-label="Detected crop regions"></ol>
+        </section>
+      </div>
+      <p class="processing-note">Images are orientation-normalized before upload, with transparency filled white and the longest edge limited to 4,096 pixels. Both the original file and the normalized PNG must fit the 20 MiB file limit. Boxes refer to this processed image.</p>
+    </main>
+    <footer><span>AgriDrone</span><span>Crop detection · Research & exploration</span></footer>
+    <noscript><p class="error">Enable JavaScript to upload an image and run this demo.</p></noscript>
+  </body>
+</html>

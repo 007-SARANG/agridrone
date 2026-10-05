@@ -1,4 +1,6 @@
 # --- Core ML / CV ---
+-r requirements-api.txt
+
 # YOLO26 ships in ultralytics 8.4.x (released Jan 2026).
 ultralytics==8.4.52
 torch==2.5.1
@@ -6,13 +8,8 @@ torchvision==0.20.1
 
 # --- Data pipeline / EDA ---
 pandas==2.2.3
-# numpy capped <2.1 to match Colab's preinstalled numba (needs <2.1) and avoid the
-# `_center`/umath ABI mismatch that aborted a Colab training run mid-session.
-numpy>=1.26,<2.1
-Pillow==11.0.0
 matplotlib==3.9.2
 seaborn==0.13.2
-PyYAML==6.0.2
 requests==2.32.3
 tqdm==4.67.1
 
@@ -20,11 +17,6 @@ tqdm==4.67.1
 onnx==1.17.0
 onnxruntime==1.20.1
 onnxslim==0.1.48
-
-# --- API (Phase 4) ---
-fastapi==0.115.5
-uvicorn[standard]==0.32.1
-python-multipart==0.0.19
 
 # --- Testing ---
 pytest==8.3.4

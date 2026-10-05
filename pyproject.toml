@@ -6,14 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "agridrone"
 version = "0.1.0"
 description = "Crop disease detection with YOLO26 + inference optimization"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 readme = "README.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "docker/tests"]
 pythonpath = ["src"]
 # -p no:cacheprovider keeps the tree clean; plugin autoload is disabled via the
 # Makefile/CI env (PYTEST_DISABLE_PLUGIN_AUTOLOAD) to avoid unrelated system

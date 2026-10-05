@@ -1,0 +1,9 @@
+# Paths are relative to the repository root. AGRIDRONE_MODEL overrides model_path.
+# Select a different YAML file with AGRIDRONE_SERVE_CONFIG.
+model_path: models/onnx/plantdoc_yolo26_best_fp32.onnx
+imgsz: 640
+confidence: 0.25
+# Request limit includes multipart headers/fields; image limit applies to the file.
+max_request_bytes: 22020096
+max_image_bytes: 20971520
+max_image_pixels: 16777216
